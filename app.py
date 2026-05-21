@@ -8,8 +8,49 @@ import io
 import base64
 import csv
 from datetime import datetime
+import os
+import requests
 
 st.set_page_config(page_title="开普勒第二定律", layout="wide")
+
+# ==================== 中文字体设置 ====================
+def setup_chinese_font():
+    """下载并注册 Noto Sans CJK SC 字体，确保 matplotlib 显示中文"""
+    font_path = "NotoSansCJKsc-Regular.ttf"
+    if not os.path.exists(font_path):
+        try:
+            # 从 Google Fonts 下载 Noto Sans CJK SC（约 2MB）
+            url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/SubsetOTF/SC/NotoSansCJKsc-Regular.otf"
+            # 使用更小的 Source Han Sans 替代（避免过大）
+            # 实际使用 Noto Sans CJK SC 的 OTF 文件较大，改用 Source Han Sans 的 TTF 子集
+            alt_url = "https://raw.githubusercontent.com/be5invis/Source-Han-Sans-ttf/master/SubsetOTF/SC/SourceHanSansSC-Normal.otf"
+            try:
+                r = requests.get(alt_url, timeout=30)
+                r.raise_for_status()
+                with open(font_path, "wb") as f:
+                    f.write(r.content)
+                st.success("中文字体下载成功")
+            except:
+                # 备用字体（较小）
+                fallback_url = "https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Normal.otf"
+                r = requests.get(fallback_url, timeout=30)
+                r.raise_for_status()
+                with open(font_path, "wb") as f:
+                    f.write(r.content)
+                st.success("中文字体下载成功")
+        except Exception as e:
+            st.warning(f"字体下载失败，中文可能显示为方框。错误：{e}")
+            return
+    try:
+        from matplotlib import font_manager
+        font_manager.fontManager.addfont(font_path)
+        plt.rcParams['font.family'] = font_manager.FontProperties(fname=font_path).get_name()
+        plt.rcParams['axes.unicode_minus'] = False
+    except:
+        pass
+
+# 调用字体设置（放在所有绘图之前）
+setup_chinese_font()
 
 # ==================== 常量 ====================
 AU = 1.0
@@ -89,7 +130,6 @@ def compute_sector_area(t_start, t_end, a, e):
 # ==================== 初始化 Session State ====================
 if "t" not in st.session_state:
     st.session_state.t = 0.0
-    st.session_state.paused = False
     st.session_state.mark_times = []
     st.session_state.segment_visible = []
     st.session_state.segment_avg_speed = []
@@ -102,38 +142,35 @@ with st.sidebar:
     st.header("控制面板")
     ecc = st.slider("偏心率 e", 0.0, 0.5, st.session_state.ecc, 0.001)
     st.session_state.ecc = ecc
-    speed_factor = st.slider("动画速度倍率", 0.1, 10.0, st.session_state.speed_factor, 0.1)
-    st.session_state.speed_factor = speed_factor
-    auto_pause = st.checkbox("标记后自动暂停", value=False)
+    
+    # 时间滑块（实现流畅交互）
+    t_val = st.slider("时间 (年)", 0.0, T, st.session_state.t, 0.001)
+    if t_val != st.session_state.t:
+        st.session_state.t = t_val
+    
     show_axes = st.checkbox("显示长短轴", value=True)
     show_terms = st.checkbox("显示节气", value=True)
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("⏸️ 暂停"):
-            st.session_state.paused = True
+        if st.button("◀ 后退"):
+            st.session_state.t = max(0.0, st.session_state.t - DT * STEPS_PER_FRAME)
         if st.button("↺ 重置时间"):
             st.session_state.t = 0.0
             st.session_state.mark_times = []
             st.session_state.segment_visible = []
             st.session_state.segment_avg_speed = []
             st.session_state.ref_area = None
-        if st.button("◀ 后退"):
-            st.session_state.paused = True
-            st.session_state.t = max(0.0, st.session_state.t - DT * STEPS_PER_FRAME)
     with col2:
-        if st.button("▶️ 继续"):
-            st.session_state.paused = False
+        if st.button("前进 ▶"):
+            st.session_state.t += DT * STEPS_PER_FRAME
+            if st.session_state.t > T:
+                st.session_state.t -= T
         if st.button("🗑️ 重置标记"):
             st.session_state.mark_times = []
             st.session_state.segment_visible = []
             st.session_state.segment_avg_speed = []
             st.session_state.ref_area = None
-        if st.button("前进 ▶"):
-            st.session_state.paused = True
-            st.session_state.t += DT * STEPS_PER_FRAME
-            if st.session_state.t > T:
-                st.session_state.t -= T
 
     if st.button("📍 添加标记", use_container_width=True):
         st.session_state.mark_times.append(st.session_state.t)
@@ -147,8 +184,6 @@ with st.sidebar:
             else:
                 st.session_state.segment_visible.append(False)
             st.session_state.segment_avg_speed.append(None)
-        if auto_pause and not st.session_state.paused:
-            st.session_state.paused = True
 
     if st.button("⚖️ 等面积点", use_container_width=True):
         if len(st.session_state.mark_times) < 2:
@@ -237,12 +272,6 @@ with st.sidebar:
                 line += f", v_avg={v:.1f}km/s"
         marks_text += line + "\n"
     st.text_area("", marks_text, height=200)
-
-# ==================== 更新时间 ====================
-if not st.session_state.paused:
-    st.session_state.t += DT * STEPS_PER_FRAME * st.session_state.speed_factor
-    if st.session_state.t > T:
-        st.session_state.t -= T
 
 # ==================== 绘图 ====================
 fig, ax = plt.subplots(figsize=(7, 7), facecolor='black')
